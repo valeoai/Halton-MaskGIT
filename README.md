@@ -197,11 +197,13 @@ The pretrained VQGAN ImageNet (f=16/8, 16384 codebook) is from the [LlamaGen off
 If you find our work useful, please cite us and add a star ⭐ to the repository :) 
 
 ```
-@inproceedings{besnier2025iclr,
-  title={Halton Scheduler for Masked Generative Image Transformer},
-  author={Victor Besnier, Mickael Chen, David Hurych, Eduardo Valle, Matthieu Cord},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2025}
+@inproceedings{
+besnier2025halton,
+title={Halton Scheduler for Masked Generative Image Transformer},
+author={Victor Besnier and Mickael Chen and David Hurych and Eduardo Valle and Matthieu Cord},
+booktitle={The Thirteenth International Conference on Learning Representations},
+year={2025},
+url={https://openreview.net/forum?id=RDVrlWAb7K}
 }
 ```
 
