@@ -4,10 +4,11 @@
 [![Hugging Face Model](https://img.shields.io/badge/Hugging%20Face-Model%20Card-orange?logo=huggingface)](https://huggingface.co/llvictorll/Halton-MaskGIT/tree/main)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/valeoai/Halton-Maskgit/blob/main/colab_demo.ipynb)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
+[![arXiv](https://img.shields.io/badge/arXiv-2503.17076-b31b1b.svg)](https://arxiv.org/abs/2503.17076)
 [![Paper](https://img.shields.io/badge/ICLR-2025-blue)](https://openreview.net/forum?id=RDVrlWAb7K) <img src="statics/its_just_a_frog_cie.png" alt="drawing" width="25"/>
 
 Official PyTorch implementation of the paper:  
-**Halton Scheduler for Masked Generative Image Transformer**  
+[**Halton Scheduler for Masked Generative Image Transformer**](https://arxiv.org/abs/2503.17076)  
 *Victor Besnier, Mickael Chen, David Hurych, Eduardo Valle, Matthieu Cord*  
 Accepted at **ICLR 2025**.
 
