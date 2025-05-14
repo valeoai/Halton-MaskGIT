@@ -114,14 +114,16 @@ class HaltonSampler(object):
                     _temp *= 0.5  # Reduce temperature during warmup
 
                 # code[mask] = torch.where(torch.rand(code[mask].size()).to(trainer.args.device) < 0.02, trainer.args.mask_value, code[mask])
-                if self.w != 0:# Model Prediction with cfg
-                    logit = trainer.vit(torch.cat([code.clone(), code.clone()], dim=0),
-                                        torch.cat([labels, labels], dim=0),
-                                        torch.cat([~drop, drop], dim=0))
+                if self.w != 0: # Model Prediction with cfg
+                    with trainer.autocast:
+                        logit = trainer.vit(torch.cat([code.clone(), code.clone()], dim=0),
+                                            torch.cat([labels, labels], dim=0),
+                                            torch.cat([~drop, drop], dim=0))
                     logit_c, logit_u = torch.chunk(logit, 2, dim=0)
                     logit = (1 + self.w) * logit_c - self.w * logit_u
                 else:
-                    logit = trainer.vit(code.clone(), labels, ~drop)
+                    with trainer.autocast:
+                        logit = trainer.vit(code.clone(), labels, ~drop)
 
                 # Compute probabilities using softmax
                 prob = torch.softmax(logit * _temp, -1)

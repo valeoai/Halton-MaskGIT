@@ -74,7 +74,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-ema",       action='store_true',              help="use an ema or not")
     # Model and Flop
     parser.add_argument("--vit-size",      type=str,   default="base",       help="size of the vit")
-    parser.add_argument('--f-factor',      type=int,   default=8,            help="image size")
+    parser.add_argument('--f-factor',      type=int,   default=16,            help="image size")
     parser.add_argument("--codebook-size", type=int,   default=1024,         help="codebook size")
     parser.add_argument("--mask-value",    type=int,   default=1024,         help="number of epoch")
     parser.add_argument("--register",      type=int,   default=1,            help="number of register")

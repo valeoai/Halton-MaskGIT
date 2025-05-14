@@ -10,12 +10,12 @@ mode: "cls-to-img"        # Options: cls-to-img | txt-to-img
 test_only: false          # Only evaluate the model
 debug: true               # Enable debugging mode
 resume: true              # Resume training of the model
-compile: false            # Compile the network with PyTorch 2.0
+compile: true            # Compile the network with PyTorch 2.0
 use_ema: false            # Use exponential moving average (EMA)
 is_master: true           # Primary machine
 is_multi_gpus: false      # default to false
 global_rank: 0            # default to 0
-dtype: "float32"          # precision
+dtype: "bfloat16"          # precision
 
 # Model and Flops
 vit_size: "large"         # Size of the Vision Transformer
