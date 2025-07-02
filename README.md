@@ -185,21 +185,19 @@ or run the gradio 🖼️ app.py -->  ```python app.py ``` and connect to http:/
 The pretrained MaskGIT models are available on [Hugging Face](https://huggingface.co/llvictorll/Halton-MaskGIT/tree/main).
 Use them to jump straight into inference or fine-tuning.
 
-| Model            | Params | Input  | GFLOPs | Train iters | Steps | CFG | FID ↓    | IS ↑    | Link                                                                                            |
-|------------------|--------|--------|--------|-------------|-------|-----|----------|---------|-------------------------------------------------------------------------------------------------|
-| Halton-MaskGIT-T | 23M    | 16²    | 4      | 1.5M        | 32    | 1.5 | 10.2     | 185     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_tiny.pth)  |
-| Halton-MaskGIT-S | 69M    | 16²    | 12     | 1.5M        | 32    | 1.0 | 6.40     | 255     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_small.pth) |
-| Halton-MaskGIT-B | 142M   | 16²    | 25     | 1.5M        | 32    | 0.7 | 4.17     | 263     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_base.pth)  |
-| Halton-MaskGIT-S | 69M    | 24²    | 28     | 1.5M        | 32    | 1.0 | 6.11     | 241     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_small.pth) |
-| Halton-MaskGIT-B | 142M   | 24²    | 56     | 1.5M        | 32    | 0.7 | 4.15     | 257     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_base.pth)  |
-| Halton-MaskGIT-L | 480M   | 24²    | 187    | 1.5M        | 32    | 0.5 | **2.59** | **281** | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_large.pth) |
-
+| Model       | Params | Input  | GFLOPs | Steps | CFG | FID↓    | IS↑    | Link                                                                                            |
+|-------------|--------|--------|--------|-------|-----|----------|---------|-------------------------------------------------------------------------------------------------|
+| H-MaskGIT-T | 23M    | 16²    | 4      | 32    | 1.5 | 10.2     | 185     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_tiny.pth)  |
+| H-MaskGIT-S | 69M    | 16²    | 12     | 32    | 1.0 | 6.40     | 255     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_small.pth) |
+| H-MaskGIT-B | 142M   | 16²    | 25     | 32    | 0.7 | 4.17     | 263     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_base.pth)  |
+| H-MaskGIT-S | 69M    | 24²    | 28     | 32    | 1.0 | 6.11     | 241     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_small.pth) |
+| H-MaskGIT-B | 142M   | 24²    | 56     | 32    | 0.7 | 4.15     | 257     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_base.pth)  |
+| H-MaskGIT-L | 480M   | 24²    | 187    | 32    | 0.5 | **2.59** | **281** | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_large.pth) |
+For all the experiments above, we used the Halton scheduler and train the models with batch size of 256 for 1.5M iterations.
 
 We use the VQGAN from the LlamaGEN repository available [here](https://huggingface.co/FoundationVision/LlamaGen/blob/main/vq_ds16_c2i.pt).
 
 The pre-computed ImageNet-256 inceptions features are available [here](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_train_stats.pt) or by launching `python extract_train.fid.py`.
-
-For all the experiments above, we used the Halton scheduler.
 
 ## ❤️ Contribute
 We welcome contributions and feedback! 🛠️
