@@ -26,11 +26,8 @@ class SampleAndEval:
     @torch.no_grad()
     def compute_images_features_from_model(self, trainer, sampler, data_loader):
         bar = tqdm(data_loader, leave=False, desc="Computing images features") if self.is_master else data_loader
-        cpt = 0
+        
         for images, labels in bar:
-            if cpt * data_loader.batch_size * self.nb_gpus >= self.num_images > 0:
-                break
-
             labels = labels.to(self.device)
             if self.mode == "t2i":
                 labels = labels[0]  # <- coco does have 5 captions for each img
@@ -48,7 +45,8 @@ class SampleAndEval:
             if not os.path.exists("./saved_networks/ImageNet_256_train_stats.pt") or not trainer.args.data.startswith("imagenet"):
                 self.inception_metrics.update(images, image_type="real")
 
-            cpt += 1
+            if self.inception_metrics.count >= self.num_images:
+                break
 
         metrics = self.inception_metrics.compute()
 

@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 class HaltonSampler(object):
     """
-    HaltonSampler is a sampling strategy for iterative masked token prediction in image generation models.
+    Halton Sampler is a sampling strategy for iterative masked token prediction in image generation models.
 
     It follows a Halton-based scheduling approach to determine which tokens to predict at each step.
     """
@@ -94,6 +94,7 @@ class HaltonSampler(object):
 
             # Softmax temperature
             bar = tqdm(range(self.step), leave=False) if verbose else range(self.step)
+            prev_r = 0
             for index in bar:
                 # Compute the number of tokens to predict
                 ratio = ((index + 1) / self.step)
@@ -102,7 +103,7 @@ class HaltonSampler(object):
                 r = max(index + 1, r)
 
                 # Construct the mask for the current step
-                _mask = halton_mask.clone()[:, :r]
+                _mask = halton_mask.clone()[:, prev_r:r]
                 mask = torch.zeros(nb_sample, trainer.input_size, trainer.input_size, dtype=torch.long)
                 for i_mask in range(nb_sample):
                     mask[i_mask, _mask[i_mask, :, 0], _mask[i_mask, :, 1]] = 1
@@ -113,7 +114,6 @@ class HaltonSampler(object):
                 if index < self.temp_warmup:
                     _temp *= 0.5  # Reduce temperature during warmup
 
-                # code[mask] = torch.where(torch.rand(code[mask].size()).to(trainer.args.device) < 0.02, trainer.args.mask_value, code[mask])
                 if self.w != 0: # Model Prediction with cfg
                     with trainer.autocast:
                         logit = trainer.vit(torch.cat([code.clone(), code.clone()], dim=0),
@@ -141,7 +141,7 @@ class HaltonSampler(object):
 
                 l_codes.append(pred_code.view(nb_sample, trainer.input_size, trainer.input_size).clone())
                 l_mask.append(mask.view(nb_sample, trainer.input_size, trainer.input_size).clone().float())
-
+                prev_r = r
             # Decode the final prediction
             code = torch.clamp(code, 0, trainer.args.codebook_size - 1)
             x = trainer.ae.decode_code(code)

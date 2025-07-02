@@ -101,20 +101,23 @@ class MaskGIT(Trainer):
             if self.args.resume:
                 if os.path.isfile(self.args.vit_folder + "current.pth"):
                     ckpt = self.args.vit_folder + "current.pth"
-                else:
+                elif os.path.isfile(self.args.vit_folder):
                     ckpt = self.args.vit_folder
+                else:
+                    ckpt = None
 
-                checkpoint = torch.load(ckpt, map_location='cpu', weights_only=False)
-                state_dict = checkpoint['model_state_dict']
-                new_state_dict = {k.replace("module.", "").replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-                model.load_state_dict(new_state_dict, strict=True)
+                if ckpt is not None:
+                    checkpoint = torch.load(ckpt, map_location='cpu', weights_only=False)
+                    state_dict = checkpoint['model_state_dict']
+                    new_state_dict = {k.replace("module.", "").replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+                    model.load_state_dict(new_state_dict, strict=True)
 
-                # Update the current epoch and iteration
-                self.args.iter = checkpoint['iter']
-                self.args.global_epoch = checkpoint['global_epoch']
-                if self.args.is_master:
-                    print("Load ckpt from:", ckpt)
-                    print("Number of iteration(s):", self.args.iter)
+                    # Update the current epoch and iteration
+                    self.args.iter = checkpoint['iter']
+                    self.args.global_epoch = checkpoint['global_epoch']
+                    if self.args.is_master:
+                        print("Load ckpt from:", ckpt)
+                        print("Number of iteration(s):", self.args.iter)
 
         elif archi == "vqgan-llama":
             # Initialize and load VQGAN model
@@ -325,7 +328,7 @@ class MaskGIT(Trainer):
             print("Start training:")
 
         start = time.time()
-        # This is the sampler used for evaluation (no for visualization)
+        # This is the sampler used for evaluation (not for visualization)
         if self.args.sampler == "halton":
             eval_sampler = HaltonSampler(
                 sm_temp_min=1., sm_temp_max=1., temp_warmup=0, w=0, sched_pow=self.args.sched_pow,

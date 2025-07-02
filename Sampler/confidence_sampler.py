@@ -16,7 +16,8 @@ class ConfidenceSampler(object):
         self.step = step
 
     def __str__(self):
-        s = f"Scheduler: {self.sched_mode}, Steps: {self.step}, " \
+        s = f"Scheduler: Confidence, " \
+            f"Sequence: {self.sched_mode}, Steps: {self.step}, " \
             f"SoftMax temp: {self.sm_temp}, CFG w: {self.w}, " \
             f"Randomize temp: {self.r_temp}"
         return s

@@ -279,34 +279,31 @@ class Transformer(nn.Module):
 if __name__ == "__main__":
     from thop import profile
 
-    # for size in ["tiny", "small", "base", "large", "xlarge"]:
-    size = "base"
-    print(size)
-    if size == "tiny":
-        hidden_dim, depth, heads = 384, 6, 6
-    elif size == "small":
-        hidden_dim, depth, heads = 512, 8, 6
-    elif size == "base":
-        hidden_dim, depth, heads = 768, 12, 12
-    elif size == "large":
-        hidden_dim, depth, heads = 1024, 24, 16
-    elif size == "xlarge":
-        hidden_dim, depth, heads = 1152, 28, 16
-    else:
-        hidden_dim, depth, heads = 768, 12, 12
+    for size in ["tiny", "small", "base"]: # "large", "xlarge"]:
+        # size = "tiny"
+        print(size)
+        if size == "tiny":
+            hidden_dim, depth, heads = 384, 6, 6
+        elif size == "small":
+            hidden_dim, depth, heads = 512, 12, 6
+        elif size == "base":
+            hidden_dim, depth, heads = 768, 12, 12
+        elif size == "large":
+            hidden_dim, depth, heads = 1024, 24, 16
+        elif size == "xlarge":
+            hidden_dim, depth, heads = 1152, 28, 16
+        else:
+            hidden_dim, depth, heads = 768, 12, 12
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_size = 32
-    model = Transformer(input_size=input_size, nclass=1000, hidden_dim=hidden_dim, codebook_size=16834,
-                        depth=depth, heads=heads, mlp_dim=hidden_dim * 4, dropout=0.1).to(device)
-    # model = torch.compile(model)
-    code = torch.randint(0, 16384, size=(1, input_size, input_size)).to(device)
-    cls = torch.randint(0, 1000, size=(1,)).to(device)
-    d_label = (torch.rand(1) < 0.1).to(device)
-    attn_mask = torch.cat([
-        torch.rand(1, (input_size//2)**2).to(device) > 1,
-        torch.tensor([[True]], dtype=torch.bool, device=device)
-    ], dim=1)
-    flops, params = profile(model, inputs=(code, cls, d_label))
-    print(f"FLOPs: {flops//1e9:.2f}G, Params: {params/1e6:.2f}M")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        input_size = 16
+        model = Transformer(input_size=input_size, nclass=1000, hidden_dim=hidden_dim, codebook_size=16834,
+                            depth=depth, heads=heads, mlp_dim=hidden_dim * 4, dropout=0.1).to(device)
+        # model = torch.compile(model)
+        code = torch.randint(0, 16384, size=(1, input_size, input_size)).to(device)
+        cls = torch.randint(0, 1000, size=(1,)).to(device)
+        d_label = (torch.rand(1) < 0.1).to(device)
+
+        flops, params = profile(model, inputs=(code, cls, d_label))
+        print(f"FLOPs: {flops//1e9:.2f}G, Params: {params/1e6:.2f}M")
 

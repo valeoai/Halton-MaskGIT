@@ -152,6 +152,7 @@ class MultiInceptionMetrics(Metric):
         self.real_features = []
         self.fake_features = []
         self.fake_logits = []
+        self.add_state("count", torch.tensor(0.0, device=device), dist_reduce_fx="sum")
 
     def update(self, images, image_type="fake") -> None:
         # extract the features
@@ -163,6 +164,8 @@ class MultiInceptionMetrics(Metric):
             features = features.unsqueeze(0)
             logits = logits.unsqueeze(0)
 
+        self.count += features.size(0) 
+
         if image_type == "real":
             self.real_features.append(features)
         elif image_type == "fake":
@@ -172,7 +175,6 @@ class MultiInceptionMetrics(Metric):
     def fid(self, real_features, fake_features):
         if not self.real_features:
             if os.path.exists("./saved_networks/ImageNet_256_train_stats.pt"):
-                print(f"Use Pre-computed stats")
                 loaded_data = torch.load("./saved_networks/ImageNet_256_train_stats.pt", weights_only=True)
                 real_features_mean = loaded_data["mu"].to(fake_features.device)
                 real_features_cov = loaded_data["cov"].to(fake_features.device)
@@ -304,7 +306,6 @@ class MultiInceptionMetrics(Metric):
     def free(self):
         self.inception.to('cpu')
         del self.inception  # delete the model
-        torch.cuda.empty_cache()  # clear the cache
 
     @staticmethod
     def gather_and_concat(tensor):
@@ -319,9 +320,11 @@ class MultiInceptionMetrics(Metric):
         """
         if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
             # List to hold gathered tensors from each device
-            gathered_tensors = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
+            gathered_tensors = [
+                torch.empty_like(tensor, device=tensor.device).clone() for _ in range(dist.get_world_size())
+            ]
             # Gather tensors from all devices
-            dist.all_gather(gathered_tensors, tensor)
+            dist.all_gather(gathered_tensors, tensor.contiguous())
             # Concatenate along the first dimension
             concatenated_tensor = torch.cat(gathered_tensors, dim=0)
             return concatenated_tensor

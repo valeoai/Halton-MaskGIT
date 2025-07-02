@@ -46,12 +46,33 @@ def main(args):
 
     maskgit = MaskGIT(args)
 
-    if args.test_only:
-        eval_sampler = maskgit.sampler
-        maskgit.eval(sampler=eval_sampler, num_images=-1, save_exemple=False, compute_pr=False,
-                     split="Test", mode="c2i", data=args.data.split("_")[0])
-    else:
+    if not args.test_only:
         maskgit.fit()
+
+    eval_sampler = maskgit.sampler
+    m = maskgit.eval(sampler=eval_sampler, num_images=50_000, save_exemple=False, compute_pr=False,
+                     split="Test", mode="c2i", data=args.data.split("_")[0])
+    
+    if maskgit.args.is_master:
+        selected_hparams = {
+            'Vit size': maskgit.args.vit_size,
+            'img-size': maskgit.args.img_size,
+            'sampler': maskgit.args.sampler,
+            'cfg_w': maskgit.args.cfg_w,
+            'step': int(maskgit.args.step),
+            'iter': int(maskgit.args.iter)
+        }
+
+        selected_metrics = {
+            'FID': float(m['FID']),
+            'IS': float(m['IS'])
+        }
+        version = sum(1 for name in os.listdir(maskgit.args.writer_log) if os.path.isdir(os.path.join(maskgit.args.writer_log, name)) and name.startswith("version_"))
+        maskgit.writer.add_hparams(
+            hparam_dict=selected_hparams,
+            metric_dict=selected_metrics,
+            run_name=f"version_{version}"
+        )
 
     return 0
 

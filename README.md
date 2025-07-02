@@ -13,7 +13,7 @@ Official PyTorch implementation of the paper:
 Accepted at **ICLR 2025**.
 
 TL;DR: We introduce a new sampling strategy using the Halton Scheduler, which spreads tokens uniformly across the image.
-This approach reduces sampling errors, and improves image quality.
+This approach reduces sampling errors, and improves image quality, compared to the confidence scheduler. 
 
 ---
 
@@ -43,7 +43,7 @@ The v1.0 version, previously known as "MaskGIT-pytorch" is available [here!](htt
 
 ```plaintext
 ├ Halton-MaskGIT/
-|    ├── Congig/                                <- Base config file for the demo
+|    ├── Config/                                <- Base config file for the demo
 |    |      ├── base_cls2img.yaml                                
 |    |      └── base_txt2img.yaml               
 |    ├── Dataset/                               <- Data loading utilities
@@ -73,6 +73,7 @@ The v1.0 version, previously known as "MaskGIT-pytorch" is available [here!](htt
 |    ├── colab_demo.ipynb                       <- Inference demo 
 |    ├── app.py                                 <- Gradio example
 |    ├── LICENSE.txt                            <- MIT license
+|    ├── extract_vq_features.py                 <- extract VQGAN codes
 |    ├── env.yaml                               <- Environment setup file
 |    ├── README.md                              <- This file! 📖
 |    └── main.py                                <- Main script
@@ -138,27 +139,38 @@ from Sampler.halton_sampler import HaltonSampler
 
 config_path = "Config/base_cls2img.yaml"        # Path to your config file
 args = load_args_from_file(config_path)
+
+# Update arguments
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Download the VQGAN from LlamaGen 
-hf_hub_download(repo_id="FoundationVision/LlamaGen", 
-                filename="vq_ds16_c2i.pt", 
-                local_dir="./saved_networks/")
+# Select Network (Large 384 is the best, but the slowest)
+args.vit_size = "Large"  # "tiny", "small", "base", "large"
+args.img_size = 384  # 256 or 384
+args.compile = False
+args.dtype = "float32"
+args.resume = True
+args.vit_folder = f"./saved_networks/ImageNet_{args.img_size}_{args.vit_size}.pth"
 
 # Download the MaskGIT
-hf_hub_download(repo_id="llvictorll/Halton-Maskgit", 
-                filename="ImageNet_384_large.pth", 
-                local_dir="./saved_networks/")
+hf_hub_download(repo_id="llvictorll/Halton-Maskgit",
+                filename=f"ImageNet_{args.img_size}_{args.vit_size}.pth",
+                local_dir="./saved_networks")
+
+# Download VQGAN
+hf_hub_download(repo_id="FoundationVision/LlamaGen",
+                filename="vq_ds16_c2i.pt",
+                local_dir="./saved_networks")
+
 
 # Initialisation of the model
 model = MaskGIT(args)
 
-# select your scheduler
+# select your scheduler (Halton is better)
 sampler = HaltonSampler(sm_temp_min=1, sm_temp_max=1.2, temp_pow=1, temp_warmup=0, w=2,
                         sched_pow=2, step=32, randomize=True, top_k=-1)
 
-# [goldfish, chicken, tiger cat, hourglass, ship, dog, race car, airliner]
-labels = [1, 7, 282, 604, 724, 179, 751, 404] 
+# [goldfish, chicken, tiger cat, hourglass, ship, dog, race car, airliner, teddy bear]
+labels = torch.LongTensor([1, 7, 282, 604, 724, 179, 681, 850]).to(args.device)
 
 gen_images = sampler(trainer=model, nb_sample=8, labels=labels, verbose=True)[0]
 show_images_grid(gen_images)
@@ -168,13 +180,24 @@ or run the gradio 🖼️ app.py -->  ```python app.py ``` and connect to http:/
 🎨 Want to try the model, but you don't have a gpu? Check out the Colab Notebook for an easy-to-run demo! 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/valeoai/Halton-Maskgit/blob/main/colab_demo.ipynb)
 
+
 ## 🧠 Pretrained Models
 The pretrained MaskGIT models are available on [Hugging Face](https://huggingface.co/llvictorll/Halton-MaskGIT/tree/main).
 Use them to jump straight into inference or fine-tuning.
 
-| Model                | # Params | # Input | # GFLOP | VQGAN |  MaskGIT                                                          | 
-|----------------------|----------|---------|---------|--------|-------------------------------------------------------------------|
-| Halton-MaskGIT-Large | 480M     | 24x24   | 83.00   | [🔗 Download](https://huggingface.co/FoundationVision/LlamaGen/blob/main/vq_ds16_c2i.pt)   |  [🔗 Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_large.pth)  | 
+| Model                | # Params | # Input | # GFLOP | # Train Iter. |Steps | Cfg | FID    | IS  | MaskGIT                                                                                         |
+|----------------------|----------|---------|---------|---------------|------|-----|--------|-----|-------------------------------------------------------------------------------------------------|
+| Halton-MaskGIT-Tiny  | 23M      | 16x16   | 4       | 1.5M          |  32  | 1.5 | 10.2   | 185 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_tiny.pth)  | 
+| Halton-MaskGIT-Small | 69M      | 16x16   | 12      | 1.5M          |  32  | 1.0 | 6.40   | 255 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_small.pth) | 
+| Halton-MaskGIT-Base  | 142M     | 16x16   | 25      | 1.5M          |  32  | 0.7 | 4.17   | 263 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_base.pth)  | 
+| Halton-MaskGIT-Small | 69M      | 24x24   | 28      | 1.5M          |  32  | 1.0 | 6.11   | 241 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_small.pth) | 
+| Halton-MaskGIT-Base  | 142M     | 24x24   | 56      | 1.5M          |  32  | 0.7 | 4.15   | 257 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_base.pth)  | 
+| Halton-MaskGIT-Large | 480M     | 24x24   | 187     | 1.5M          |  32  | 0.5 | 2.59   | 281 | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_large.pth) | 
+
+
+We use the VQGAN from the LlamaGEN repository available [here](https://huggingface.co/FoundationVision/LlamaGen/blob/main/vq_ds16_c2i.pt)
+The pre-computed ImageNet-256 inceptions features are available [here](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_256_train_stats.pt) or by launching `python extract_train.fid.py`
+For all the experiments above, we used the Halton scheduler.
 
 ## ❤️ Contribute
 We welcome contributions and feedback! 🛠️

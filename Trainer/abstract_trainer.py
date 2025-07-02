@@ -284,8 +284,8 @@ class Trainer(object):
 
         # Load the dataset for evaluation (containing the Images)
         data_loader = get_data(
-            data, 256, self.args.eval_folder,
-            self.args.bsize, self.args.num_workers, self.args.is_multi_gpus, -1
+            data, 256, self.args.eval_folder, min(self.args.bsize, 10), 
+            self.args.num_workers, self.args.is_multi_gpus, self.args.seed
         )[1]
 
         # Evaluate the model
