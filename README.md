@@ -193,6 +193,7 @@ Use them to jump straight into inference or fine-tuning.
 | H-MaskGIT-S | 69M    | 24²    | 28     | 32    | 1.0 | 6.11     | 241     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_small.pth) |
 | H-MaskGIT-B | 142M   | 24²    | 56     | 32    | 0.7 | 4.15     | 257     | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_base.pth)  |
 | H-MaskGIT-L | 480M   | 24²    | 187    | 32    | 0.5 | **2.59** | **281** | 🔗[Download](https://huggingface.co/llvictorll/Halton-MaskGIT/blob/main/ImageNet_384_large.pth) |
+
 For all the experiments above, we used the Halton scheduler and train the models with batch size of 256 for 1.5M iterations.
 
 We use the VQGAN from the LlamaGEN repository available [here](https://huggingface.co/FoundationVision/LlamaGen/blob/main/vq_ds16_c2i.pt).
