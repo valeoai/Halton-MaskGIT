@@ -13,7 +13,7 @@ args = load_args_from_file(config_path)
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Select Network (Large 384 is the best, but the slowest)
-args.vit_size = "Large"  # "tiny", "small", "base", "large"
+args.vit_size = "large"  # "tiny", "small", "base", "large"
 args.img_size = 384  # 256 or 384
 args.compile = False
 args.dtype = "float32"
@@ -22,7 +22,7 @@ args.vit_folder = f"./saved_networks/ImageNet_{args.img_size}_{args.vit_size}.pt
 
 # Download the MaskGIT
 hf_hub_download(repo_id="llvictorll/Halton-Maskgit",
-                filename=f"ImageNet_{args.img_size}_{args.vit_size}.pth",
+                filename=f"ImageNet_{args.img_size}_{args.vit_size.lower()}.pth",
                 local_dir="./saved_networks")
 
 # Download VQGAN
