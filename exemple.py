@@ -22,7 +22,7 @@ args.vit_folder = f"./saved_networks/ImageNet_{args.img_size}_{args.vit_size}.pt
 
 # Download the MaskGIT
 hf_hub_download(repo_id="llvictorll/Halton-Maskgit",
-                filename=f"ImageNet_{args.img_size}_{args.vit_size.lower()}.pth",
+                filename=f"ImageNet_{args.img_size}_{args.vit_size}.pth",
                 local_dir="./saved_networks")
 
 # Download VQGAN
