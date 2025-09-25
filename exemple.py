@@ -6,6 +6,7 @@ from huggingface_hub import hf_hub_download
 from Trainer.cls_trainer import MaskGIT
 from Sampler.halton_sampler import HaltonSampler
 
+
 config_path = "Config/base_cls2img.yaml"        # Path to your config file
 args = load_args_from_file(config_path)
 

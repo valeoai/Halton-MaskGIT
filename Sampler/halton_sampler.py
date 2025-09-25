@@ -188,3 +188,77 @@ class HaltonSampler(object):
         indexes = np.unique(mask.numpy(), return_index=True, axis=0)[1]
         mask = [mask[index].numpy().tolist() for index in sorted(indexes)]
         return torch.LongTensor(np.array(mask))
+
+# ========= Halton-ToMe helpers =========
+def _halton_centers_and_assignments_sq(h_or_w: int, num_centers: int, device):
+    """
+    使用 HaltonSampler.build_halton_mask(h) 生成 [N,2] (y,x) 样本点，
+    前 num_centers 个作为中心，其余 token 依据 2D 欧氏距离分配到最近中心。
+    仅支持正方形网格 (h==w) 的场景；N = h*h。
+    返回:
+      centers_yx: [M,2]
+      cluster_ids: [N] 中每个 token 的簇 id (0..M-1)
+      counts: [M] 每个簇的成员数
+    """
+    N = h_or_w * h_or_w
+    # 总的 token 数
+    M = max(1, int(round(N * 1.0)))  # 默认先占位，实际由外层控制 keep_ratio 决定
+    # 这里仅生成 Halton mask，真正的 M 在外部生效
+    # 确保至少是 1，避免出现 M = 0 的情况
+    halton_mask = HaltonSampler.build_halton_mask(h_or_w).to(device)  # [N,2] (y,x)
+
+    def _build_with_M(M_): # M_ 保留的中心数
+        centers_yx = halton_mask[:M_].to(device)               # [M,2]
+        # 取前 M 个作为中心
+        yy, xx = torch.meshgrid(
+            torch.arange(h_or_w, device=device),
+            torch.arange(h_or_w, device=device),
+            indexing="ij"
+        )
+        coords = torch.stack([yy, xx], dim=-1).reshape(-1, 2).float()  # [N,2]
+        # 计算 N×M 距离并找最近中心
+        dist = torch.cdist(coords, centers_yx.float(), p=2)             # [N,M]
+        # torch.cdist 计算两两之间的距离。
+        # 得到一个 [N, M] 的矩阵：第 i 行表示第 i 个 token 到所有 M 个中心的距离。
+        cluster_ids = dist.argmin(dim=1)                                 # [N]
+        # cluster_ids 的形状是 [N]，每个元素是 0..M_-1 之间的整数，代表 token 属于哪个簇
+        counts = torch.bincount(cluster_ids, minlength=M_).clamp_min(1) # [M]
+        # counts 的形状是 [M]，每个元素表示对应簇的成员数量，确保最少为 1
+        return centers_yx, cluster_ids, counts
+        # centers_yx：中心坐标（形状 [M, 2]，比如 (y, x)）。
+        # cluster_ids：每个 token 的簇 ID（形状 [N]）。
+        # counts：每个簇的 token 数（形状 [M]，不会小于 1）。
+
+    return _build_with_M
+    # 用法：build = _halton_centers_and_assignments_sq(h, None, device); centers, ids, cnt = build(M)
+    
+
+def _merge_tokens_spatial(x_spatial, cluster_ids, counts):
+    """
+    均值合并同簇 token。
+    x_spatial: [B,N,C]; cluster_ids: [N]; counts: [M]
+    返回 xm: [B,M,C]
+    """
+    B, N, C = x_spatial.shape
+    M = counts.numel()
+    xm = x_spatial.new_zeros(B, M, C)
+    idx = cluster_ids.view(1, N, 1).expand(B, N, C)           # [B,N,C]
+    xm.scatter_add_(1, idx, x_spatial)                        # 同簇求和
+    # xm: [B,M,C]，每个中心的特征是其簇内所有 token 特征的和
+    xm = xm / counts.view(1, M, 1)                            # 均值
+    # 得到均值特征
+    return xm
+
+
+def _unmerge_tokens_spatial(xm_spatial, cluster_ids):
+    """
+    反合并：把中心特征复制回各成员。
+    xm_spatial: [B,M,C]; cluster_ids: [N]
+    返回 x: [B,N,C]
+    """
+    B, M, C = xm_spatial.shape
+    N = cluster_ids.numel()
+    idx = cluster_ids.view(1, N, 1).expand(B, N, C)           # [B,N,C] 值域 0..M-1
+    x = xm_spatial.gather(dim=1, index=idx)                   # 复制中心到成员
+    return x
+# ======================================
