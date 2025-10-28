@@ -290,8 +290,8 @@ class MultiInceptionMetrics(Metric):
 
         if self.real_features:
             real_features = torch.cat(self.real_features, dim=0)
-            real_features = real_features[idx]
             real_features = self.gather_and_concat(real_features)
+            real_features = real_features[idx]
         else:
             real_features = None
 
