@@ -283,10 +283,28 @@ class Trainer(object):
                 save_image(x, f"./saved_images/" + x_name)
 
         # Load the dataset for evaluation (containing the Images)
-        data_loader = get_data(
-            data, 256, self.args.eval_folder, min(self.args.bsize, 10), 
-            self.args.num_workers, self.args.is_multi_gpus, self.args.seed
-        )[1]
+        _, data_loader = get_data(
+            data=self.args.data if hasattr(self.args, "data") else data,
+            img_size=self.args.img_size if hasattr(self.args, "img_size") else 256,
+            data_folder=self.args.eval_folder,
+            bsize=min(self.args.bsize, 10), 
+            num_workers=self.args.num_workers,
+            is_multi_gpus=self.args.is_multi_gpus,
+            seed=self.args.seed,
+            eval_only=True, # Only load the validation set for evaluation
+            ) 
+        # 取得 loader 后立刻加这一段
+        try:
+            real_total = len(getattr(data_loader, "dataset", []))
+        except Exception:
+            real_total = -1  # iterable dataset 时取不到
+
+        target = getattr(self, "sae", None)
+        target = getattr(target, "num_images", None)
+
+        print(f"[EVAL] real images available in val: {real_total}, "
+            f"target num_images to generate: {target}")
+
 
         # Evaluate the model
         scores = self.sae.compute_images_features_from_model(self, sampler, data_loader)

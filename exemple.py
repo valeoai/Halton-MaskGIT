@@ -20,6 +20,7 @@ args.compile = False
 args.dtype = "float32"
 args.resume = True
 args.vit_folder = f"./saved_networks/ImageNet_{args.img_size}_{args.vit_size}.pth"
+args.tome_keep_ratio = 1.0      # Halton-Token-Merge 保留比例，1.0 表示关闭
 
 # Download the MaskGIT
 hf_hub_download(repo_id="llvictorll/Halton-Maskgit",

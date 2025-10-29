@@ -2,9 +2,9 @@
 # Paths
 vit_folder: "./saved_networks/ImageNet_384_large.pth"      # Folder where to save the Transformer
 vqgan_folder: "./saved_networks/vq_ds16_c2i.pt"            # Folder of the pretrained VQGAN
-writer_log: ""            # Folder where to store the logs
-data_folder: ""           # Folder containing the dataset of code
-eval_folder: "./gen_img"           # Folder containing the dataset of images
+writer_log: "./Datasets/"            # Folder where to store the logs
+data_folder: "/work/q-li/datasets/imagenet"           # Folder containing the dataset of code
+eval_folder: "/work/q-li/datasets/imagenet"           # Folder containing the dataset of images
 
 # Mode
 mode: "cls-to-img"        # Options: cls-to-img | txt-to-img
@@ -28,12 +28,12 @@ proj: 1                   # Projection of the tokens
 dropout: 0.1              # Dropout rate for the transformer
 
 # Data
-data: "imagenet_feat"     # Dataset to use for training
+data: "imagenet"     # Dataset to use for training
 nb_class: 1000            # Number of classes
 num_workers: 8            # Number of workers for data loading
 img_size: 384             # Image size
 seed: -1                  # Random seed (-1 means no fixed seed)
-bsize: 256                # Batch size
+bsize: 128              # Batch size
 
 # Learning
 epoch: 10000              # Number of epochs
@@ -57,7 +57,7 @@ sm_temp: 1.0              # Temperature before softmax
 sm_temp_min: 1.0          # Minimum temperature before softmax
 randomize: false          # Randomize sampling
 
-tome_keep_ratio: 0.5      # TOME keep ratio
+tome_keep_ratio: 1.0     # TOME keep ratio
 tome_merge_layer_idx: 0  # TOME merge layer index
 tome_unmerge_before_idx: -1  # TOME unmerge before index
 tome_random_roll: false  # TOME random roll

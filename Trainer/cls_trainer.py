@@ -411,3 +411,28 @@ class MaskGIT(Trainer):
                 self.save_network(model=self.ema.module, path=os.path.join(self.args.vit_folder, "last_ema.pth"),
                                   iter=self.args.iter, global_epoch=self.args.global_epoch)
         return
+
+    def train(self, mode: bool = True):
+        # 把内部所有 nn.Module 的 train/eval 状态一起切换
+        def _set_mode(obj):
+            if isinstance(obj, torch.nn.Module):
+                obj.train(mode)
+                return
+            if isinstance(obj, dict):
+                for v in obj.values(): _set_mode(v)
+            elif isinstance(obj, (list, tuple, set)):
+                for v in obj: _set_mode(v)
+            else:
+                for name in dir(obj):
+                    if name.startswith('_'): continue
+                    try:
+                        v = getattr(obj, name)
+                    except Exception:
+                        continue
+                    if callable(v): continue
+                    _set_mode(v)
+        _set_mode(self)
+        return self
+
+    def eval(self):
+        return self.train(False)
