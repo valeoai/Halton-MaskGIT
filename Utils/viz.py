@@ -74,5 +74,6 @@ def show_images_grid(batch, nrow=4, padding=2):
     plt.figure(figsize=(nrow * 2, (len(batch) // nrow + 1) * 2))
     plt.imshow(grid)
     plt.axis("off")
-    plt.show()
+    plt.savefig("./gen_img/generated_images_test.png")  # Save the figure
+    plt.close()  # Close the figure to free memory
 

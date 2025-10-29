@@ -128,6 +128,10 @@ if __name__ == "__main__":
     parser.add_argument("--sm-temp",       type=float, default=1.,           help="temperature before softmax when sampling")
     parser.add_argument("--sm-temp-min",   type=float, default=1.,           help="temperature before softmax when sampling")
     parser.add_argument("--randomize",     action='store_true',              help="only evaluate the model")
+    parser.add_argument("--tome_keep_ratio", type=float, default=1.0,       help="TOME keep ratio, 1.0 is no TOME")
+    parser.add_argument("--tome_merge_layer_idx", type=int, default=0,   help="TOME merge layer index")
+    parser.add_argument("--tome_unmerge_before_idx", type=int, default=-1, help="TOME unmerge before layer index")
+    parser.add_argument("--tome_random_roll", action='store_true',  help="TOME random roll")
 
     args = parser.parse_args()
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

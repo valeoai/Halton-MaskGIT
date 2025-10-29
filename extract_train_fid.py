@@ -3,6 +3,7 @@ import argparse
 from tqdm import tqdm
 from Dataset.dataloader import get_data
 from Metrics.inception_metrics import MultiInceptionMetrics
+import os
 
 
 class SampleAndEval:
@@ -30,7 +31,7 @@ class SampleAndEval:
         }
 
         # Save the dictionary to a file
-        torch.save(data, "./saved_networks/ImageNet_256_train_stats.pt")
+        torch.save(data, "./saved_networks/ImageNet_384_val_stats.pt")
 
 
 if __name__ == "__main__":
@@ -41,10 +42,12 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers",   type=int, default=8, help="batch size")
     args = parser.parse_args()
 
+    args.data_folder = "../datasets/imagenet"
+    args.img_size = 384
     data_loader = get_data(
         "imagenet", img_size=args.img_size, data_folder=args.data_folder, bsize=args.bsize,
-        num_workers=args.num_workers, is_multi_gpus=False, seed=-1
-    )[0]
+        num_workers=args.num_workers, is_multi_gpus=False, seed=-1,split="val" 
+    )[1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sae = SampleAndEval(device)
     sae.compute_images_features_and_save(data_loader)

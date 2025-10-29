@@ -6,6 +6,7 @@ from huggingface_hub import hf_hub_download
 from Trainer.cls_trainer import MaskGIT
 from Sampler.halton_sampler import HaltonSampler
 
+
 config_path = "Config/base_cls2img.yaml"        # Path to your config file
 args = load_args_from_file(config_path)
 
@@ -13,12 +14,13 @@ args = load_args_from_file(config_path)
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Select Network (Large 384 is the best, but the slowest)
-args.vit_size = "Large"  # "tiny", "small", "base", "large"
+args.vit_size = "large"  # "tiny", "small", "base", "large"
 args.img_size = 384  # 256 or 384
 args.compile = False
 args.dtype = "float32"
 args.resume = True
 args.vit_folder = f"./saved_networks/ImageNet_{args.img_size}_{args.vit_size}.pth"
+args.tome_keep_ratio = 1.0      # Halton-Token-Merge 保留比例，1.0 表示关闭
 
 # Download the MaskGIT
 hf_hub_download(repo_id="llvictorll/Halton-Maskgit",

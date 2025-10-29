@@ -90,12 +90,21 @@ class MaskGIT(Trainer):
 
             # Define transformer architecture parameters
             hidden_dim, depth, heads = self.transformer_size(self.args.vit_size)
+            # large: 1024, 24, 16 | base: 768, 12, 12 | small: 512, 8, 8 | tiny: 256, 6, 4
             model = Transformer(
                 input_size=self.input_size, nclass=self.args.nb_class, c=hidden_dim,
                 hidden_dim=hidden_dim, codebook_size=self.args.codebook_size,
                 depth=depth, heads=heads, mlp_dim=hidden_dim * 4, dropout=self.args.dropout,
-                register=self.args.register, proj=self.args.proj
-            )
+                register=self.args.register, proj=self.args.proj, 
+                    # === 新增：Halton-Token-Merge 开关与配置 ===
+                # 1.0 = 关闭合并；例如 0.5 表示只保留一半 token（第1层前合并、最后一层前反合并）
+                tome_keep_ratio=self.args.tome_keep_ratio,
+                # 在第几层前合并；按你实现，0 就是“第一层前”
+                tome_merge_layer_idx=self.args.tome_merge_layer_idx,
+                # 在倒数第1层前反合并；-1 就是“最后一层前”
+                tome_unmerge_before_idx=self.args.tome_unmerge_before_idx,
+                # 如需为每个前向随机 roll 一下 Halton 次序（增强/去同质化），就传 True
+                tome_random_roll=self.args.tome_random_roll,)
 
             # Load model checkpoint if resuming training
             if self.args.resume:
@@ -402,3 +411,28 @@ class MaskGIT(Trainer):
                 self.save_network(model=self.ema.module, path=os.path.join(self.args.vit_folder, "last_ema.pth"),
                                   iter=self.args.iter, global_epoch=self.args.global_epoch)
         return
+
+    def train(self, mode: bool = True):
+        # 把内部所有 nn.Module 的 train/eval 状态一起切换
+        def _set_mode(obj):
+            if isinstance(obj, torch.nn.Module):
+                obj.train(mode)
+                return
+            if isinstance(obj, dict):
+                for v in obj.values(): _set_mode(v)
+            elif isinstance(obj, (list, tuple, set)):
+                for v in obj: _set_mode(v)
+            else:
+                for name in dir(obj):
+                    if name.startswith('_'): continue
+                    try:
+                        v = getattr(obj, name)
+                    except Exception:
+                        continue
+                    if callable(v): continue
+                    _set_mode(v)
+        _set_mode(self)
+        return self
+
+    def eval(self):
+        return self.train(False)
