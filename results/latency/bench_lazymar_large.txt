@@ -1,0 +1,28 @@
+Init Cls-to-Img Maskgit on [GPU0]
+Load ckpt from: ./saved_networks/ImageNet_384_large.pth
+Number of iteration(s): 1500001
+Size of model vit: 479.985M
+Size of model vqgan-llama: 71.883M
+Parameters:  Namespace(bsize=256, cfg_w=3.0, codebook_size=16384, compile=False, data='imagenet_feat', data_folder='', debug=True, device=device(type='cuda'), drop_label=0.1, dropout=0.1, dtype='float32', epoch=10000, eval_folder='', f_factor=16, global_epoch=298, global_rank=0, grad_clip=1.0, grad_cum=1, img_size=384, is_master=True, is_multi_gpus=False, iter=1500001, lr=0.0001, mask_value=16384, mode='cls-to-img', nb_class=1000, num_workers=8, proj=1, r_temp=4.5, randomize=False, register=1, resume=True, sampler='halton', sched_mode='arccos', sched_pow=2.0, seed=-1, sm_temp=1.0, sm_temp_min=1.0, step=32, temp_warmup=0, test_only=False, top_k=-1, use_ema=False, vit_folder='./saved_networks/ImageNet_384_large.pth', vit_size='large', vqgan_folder='./saved_networks/vq_ds16_c2i.pt', warm_up=2500, writer_log='')
+
+== latency bench (LazyMAR 复现 sweep) | large-384 | batch=16 | warmup=1 timed=5 | cfg_w=0.5 | lazy L3-23 | NVIDIA RTX A6000 ==
+
+VQGAN decode      :   25.01 ms/img  (batch   400.1±0.3 ms)
+
+config                  total ms/img  transf ms/img     ±ms       实测      理论     达成率
+baseline                   2046.83        2021.82    17.05   1.000x   1.000x  100.0%
+lazymar N=none              818.23         793.23     0.51   2.549x   2.753x   92.6%
+                       └ partial k/N=0.3328 (26 步) / 全量 6 步; vsim=26 scored=21 cfgd(reuse/full/miss)=26/6/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+lazymar N=2                1245.79        1220.78     0.15   1.656x   1.699x   97.5%
+                       └ partial k/N=0.3136 (13 步) / 全量 19 步; vsim=13 scored=11 cfgd(reuse/full/miss)=19/13/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+lazymar N=3                1055.90        1030.89     0.42   1.961x   2.038x   96.2%
+                       └ partial k/N=0.3176 (17 步) / 全量 15 步; vsim=17 scored=14 cfgd(reuse/full/miss)=23/9/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+lazymar N=4                 988.35         963.35     0.15   2.099x   2.199x   95.5%
+                       └ partial k/N=0.3131 (19 步) / 全量 13 步; vsim=19 scored=16 cfgd(reuse/full/miss)=24/8/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+lazymar N=8                 912.16         887.16     0.35   2.279x   2.415x   94.4%
+                       └ partial k/N=0.3250 (22 步) / 全量 10 步; vsim=22 scored=18 cfgd(reuse/full/miss)=25/7/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+lazymar N=13                869.96         844.96     0.40   2.393x   2.559x   93.5%
+                       └ partial k/N=0.3138 (24 步) / 全量 8 步; vsim=24 scored=20 cfgd(reuse/full/miss)=25/7/0 kv_miss=0 score_miss=0 restore_miss=0 head_miss=0
+
+注: transf = total - VQGAN decode (各档解码相同); speedup 以 transformer-only 计。
+    理论列取自 flops_lazymar.py (CFG 的 2x 显式建模: lazy 步主干 1x + head 2x)。

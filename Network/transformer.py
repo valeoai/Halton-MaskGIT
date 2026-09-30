@@ -51,6 +51,27 @@ def _env_float(name, default):
         return default
 
 
+def _fit_cond_half(t, b):
+    """把上一步存的缓存对齐到本步的 batch。
+
+    CFG 残差缓存 (HALTON_CFG_DELTA=1) 打开后, 同一次 generation 里 batch 会在
+    2B ([cond ; uncond]) 和 B (只有 cond) 之间切换。所有跨 step 的缓存 (K/V、
+    restore) 都是按"上一步的 batch"存下来的, 于是 2B -> B 的那一步必须把前半
+    (= cond) 切出来 —— 这与 LazyMAR 把 cache_dic 直接按 bsz 而不是 2*bsz 开、
+    refresh 步只写 k[:B/2] 是同一件事, 只是改成在读侧做, 这样"整批步之后到底
+    是不是 lazy 步"不需要被跨 step 地预知。
+    dim0 上的切片是连续视图, 不复制。
+
+    没开 HALTON_CFG_DELTA 时直接原样返回 —— 保证既有的 lazycache / lazyvsim
+    路径逐位不受本改动影响 (batch 恒定, 本来也走不到切片分支)。
+    """
+    if not _env_flag("HALTON_CFG_DELTA"):
+        return t
+    if t is not None and t.size(0) == 2 * b:
+        return t[:b]
+    return t
+
+
 # ---------------------------------------------------------------------------
 # LazyMAR V-similarity selection (HALTON_LAZY_VSIM=1)
 # ---------------------------------------------------------------------------
@@ -340,7 +361,10 @@ class Attention(nn.Module):
 
         shape = (b, self.n_local_heads, seq_len, self.head_dim)
         for name, ref in (("cached_k", xk), ("cached_v", xv)):
-            cur = getattr(self, name)
+            # CFG 残差缓存: 上一步是整批 [cond ; uncond], 本步只跑 cond 半个
+            # batch —— 取前半即可, 不是近似。
+            cur = _fit_cond_half(getattr(self, name), b)
+            setattr(self, name, cur)
             if (cur is None or tuple(cur.shape) != shape
                     or cur.dtype != ref.dtype or cur.device != ref.device):
                 setattr(self, name, torch.zeros(shape, dtype=ref.dtype, device=ref.device))
@@ -620,7 +644,9 @@ class TransformerEncoder(nn.Module):
                 "partial_active_sum": 0, "partial_token_sum": 0,
                 "score_miss": 0, "restore_miss": 0, "forced_nonuniform": 0,
                 "scored_calls": 0, "forced_only_calls": 0, "vsim_calls": 0,
-                "head_partial_calls": 0, "head_full_calls": 0, "head_miss": 0}
+                "head_partial_calls": 0, "head_full_calls": 0, "head_miss": 0,
+                "cfg_delta_full_calls": 0, "cfg_delta_reuse_calls": 0,
+                "cfg_delta_miss": 0}
 
     def clear_ffn_cache(self):
         for blk in self.layers:
@@ -832,7 +858,7 @@ class TransformerEncoder(nn.Module):
         MAR 只在 mask_to_pred 处读 z), 这里必须回填缓存, 因为 Halton 采样器会对
         全部 576 个位置采样并记入 l_codes。
         """
-        cache = self.lazy_restore_cache
+        cache = _fit_cond_half(self.lazy_restore_cache, b)   # 见 _fit_cond_half
         valid = (cache is not None and tuple(cache.shape) == (b, n, c)
                  and cache.dtype == x_act.dtype and cache.device == x_act.device)
         if valid:
@@ -887,7 +913,7 @@ class TransformerEncoder(nn.Module):
         if vsim and budget < n:
             # 入口层要全长 K/V 才能算 V 的余弦变化量 (LazyMAR 在 decoder layer 3
             # 做这件事; 这里 start 同样应 >= 1, 让下面几层每步全量给它攒材料)。
-            prev_v = self.layers[start].attn.cached_v      # 上一步入口层的 V
+            prev_v = _fit_cond_half(self.layers[start].attn.cached_v, b)  # 上一步入口层的 V
             self.lazy_stats["vsim_calls"] += 1
             self.lazy_stats["scored_calls"] += 1
             x_act, active_idx = self.layers[start].forward_lazy(
@@ -905,7 +931,7 @@ class TransformerEncoder(nn.Module):
             first = start
         elif budget > n_forced:
             # ── 打分模式 (r < 1): 入口层要全长 K/V 才能算 V 的余弦变化量 ──
-            prev_v = self.layers[start].attn.cached_v      # 上一步入口层的 V
+            prev_v = _fit_cond_half(self.layers[start].attn.cached_v, b)  # 上一步入口层的 V
             self.lazy_stats["scored_calls"] += 1
             x_act, active_idx = self.layers[start].forward_lazy(
                 x, cond, active_idx=None, seq_len=n, mask=mask,
@@ -957,6 +983,7 @@ class Transformer(nn.Module):
     def clear_ffn_cache(self):
         """转发到 TransformerEncoder, 清空每层 Block 的 FFN delta 缓存。"""
         self.lazy_logit_cache = None
+        self.cfg_delta_cache = None
         self.transformer.clear_ffn_cache()
 
     def get_lazy_stats(self):
@@ -993,6 +1020,9 @@ class Transformer(nn.Module):
         # LazyMAR Token Cache: 上一次算过的全长 logit (b, h*w, codebook+1)。
         # partial 步只为 active 行重算, 其余行从这里取。
         self.lazy_logit_cache = None
+        # LazyMAR CFG 残差缓存 (HALTON_CFG_DELTA=1): 上一个整批步在 transformer
+        # 出口 (last_norm 之前) 记下的 uncond - cond, 形状 (b/2, N, C)。
+        self.cfg_delta_cache = None
         self.head.weight = self.tok_emb.weight
 
         self.register = register
@@ -1026,7 +1056,7 @@ class Transformer(nn.Module):
             nn.init.normal_(self.reg_tokens.weight, std=0.02)
 
     def forward(self, x, y, drop_label, mask=None, active_mask=None, cfg_pair=False,
-                step=None, total_steps=None):
+                step=None, total_steps=None, cfg_delta=False):
         """
         active_mask: (b, h, w) bool — newly-active token positions for
         partial-update mode (Q-only-active attention).
@@ -1038,6 +1068,10 @@ class Transformer(nn.Module):
         steps.  Only used by the V-similarity selection (HALTON_LAZY_VSIM=1),
         whose recompute ratio decays with the step (LazyMAR's
         RETAIN_RATIO_SCHEDULE).  Everything else ignores them.
+        cfg_delta:   True asks for a "lazy" CFG step (HALTON_CFG_DELTA=1): only
+        the conditional half of the [cond ; uncond] batch goes through the
+        transformer, and the unconditional half is rebuilt from the cached
+        residual.  Ignored unless HALTON_CFG_DELTA=1 and cfg_pair is True.
         """
         b, h, w = x.size()
         h0, w0 = h, w   # original spatial dims before any proj
@@ -1083,8 +1117,56 @@ class Transformer(nn.Module):
             reg = torch.arange(0, self.register, dtype=torch.long, device=x.device)
             x = torch.cat([x, self.reg_tokens(reg).expand(b, self.register, self.hidden_dim)], dim=1)
 
-        x = self.transformer(x, y, mask=mask, active_mask=seq_active_mask, cfg_pair=cfg_pair,
+        # ── LazyMAR CFG 残差缓存 (HALTON_CFG_DELTA=1) ─────────────────────
+        # LazyMAR forward_mae_decoder 的做法: 整批步跑完整的 [cond ; uncond] 并把
+        # uncond - cond 的残差存下来 (它存在 decoder 最后一层输出上); lazy 步只跑
+        # cond 半个 batch, uncond 用 "cond + 上次的残差" 补出来。
+        # 这里的缓存点取在 transformer 出口 / last_norm 之前, 与 LazyMAR 对应 ——
+        # 于是 uncond 分支仍然用它自己的 y 过 AdaNorm 和 head, 被跳过的只有主干。
+        # 切前半是精确的: 两半的 token embedding 逐位相同 (采样器传的是
+        # cat([code, code])), cond/uncond 的差别只经由 y 进入 AdaLN。
+        cfg_delta_on = _env_flag("HALTON_CFG_DELTA") and cfg_pair and b % 2 == 0
+        if cfg_delta_on and seq_active_mask is not None and not _env_flag("HALTON_LAZY_CACHE"):
+            raise RuntimeError(
+                "HALTON_CFG_DELTA 只支持两种组合: 与 HALTON_LAZY_CACHE 一起用, 或者在"
+                "完全不给 active_mask 的全量模式下单独用。旧的 FFN/ATTN/LAYER delta "
+                "缓存在 batch 减半时会静默退化成 0-delta, 故拒绝。"
+            )
+        half = b // 2
+        stats = self.transformer.lazy_stats
+        reuse = False
+        if cfg_delta_on and cfg_delta:
+            cache = self.cfg_delta_cache
+            # dtype 不参与判定: 缓存来自 transformer 的输出 (autocast 下可能是
+            # bf16), 而此处的 x 还是 embedding 的 dtype, 两者本就可以不同。
+            reuse = (cache is not None
+                     and tuple(cache.shape) == (half, x.size(1), self.hidden_dim)
+                     and cache.device == x.device)
+            if not reuse:
+                # 没有可用残差。gate 正常时只可能发生在本次 generation 的第一个
+                # lazy 步之前没有任何整批步的情况下 —— 退回整批前向, 安全但不省。
+                stats["cfg_delta_miss"] += 1
+
+        if reuse:
+            x_in, y_in = x[:half], y[:half]
+            am_in = seq_active_mask[:half] if seq_active_mask is not None else None
+            mask_in = mask[:half] if (mask is not None and mask.size(0) == b) else mask
+        else:
+            x_in, y_in, am_in, mask_in = x, y, seq_active_mask, mask
+
+        x = self.transformer(x_in, y_in, mask=mask_in, active_mask=am_in,
+                             # lazy 步的 batch 里只剩 cond 一半, 不再是 [cond;uncond]:
+                             # 此时若还按 cfg_pair 把前后半的选点分数平均, 等于把两个
+                             # 不相干的样本混在一起。
+                             cfg_pair=(cfg_pair and not reuse),
                              step=step, total_steps=total_steps)
+
+        if reuse:
+            x = torch.cat([x, x + self.cfg_delta_cache.to(x.dtype)], dim=0)
+            stats["cfg_delta_reuse_calls"] += 1
+        elif cfg_delta_on:
+            self.cfg_delta_cache = (x[half:] - x[:half]).detach()
+            stats["cfg_delta_full_calls"] += 1
 
         x = x[:, :h * w].contiguous()   # drop register tokens
 
@@ -1109,6 +1191,11 @@ class Transformer(nn.Module):
         if (self.proj == 1 and _env_flag("HALTON_LAZY_CACHE")
                 and _env_flag("HALTON_LAZY_HEAD", "1")):
             act_idx = self.transformer.lazy_last_active_idx
+
+        if act_idx is not None and act_idx.size(0) != b:
+            # CFG 残差缓存的 lazy 步: transformer 只跑了 cond 半个 batch, 两半共用
+            # 同一批 active 下标 (uncond 就是 cond 加残差补出来的)。
+            act_idx = act_idx.repeat(2, 1) if act_idx.size(0) * 2 == b else None
 
         if act_idx is not None:
             n_img = x.size(1)

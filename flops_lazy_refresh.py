@@ -33,7 +33,11 @@ REGISTER = 1
 SEQ      = TOK + REGISTER             # 577
 CODEBOOK = 16384
 STEPS    = 32
-GATE_LO, GATE_HI = 5, 31              # partial 步: GATE_LO <= t < GATE_HI
+# partial 步: GATE_LO <= t < GATE_HI。
+# 左端跟采样器一样可由 HALTON_PARTIAL_START_STEP 覆盖 (默认 5), 这样本文件和
+# Sampler/halton_sampler.py 读的是同一个 env, 不会两边对不上。右端 31 固定。
+GATE_LO = max(0, int(os.environ.get("HALTON_PARTIAL_START_STEP", "5")))
+GATE_HI = 31
 
 SIZES = {                             # name -> (depth, hidden_dim)
     "tiny":  (6, 384),
@@ -44,6 +48,8 @@ SIZES = {                             # name -> (depth, hidden_dim)
 }
 
 REFRESH_NS = [0, 2, 3, 4, 8, 13]      # 0 = no refresh
+if os.environ.get("REFRESH_NS"):      # 逗号分隔, 用来只跑某几档
+    REFRESH_NS = [int(v) for v in os.environ["REFRESH_NS"].split(",") if v.strip()]
 
 
 def swiglu_hidden(mlp_dim, multiple_of=256):
@@ -97,6 +103,20 @@ def active_count(t):
     return (r_t - r_p1) + (r_p1 - r_p2) + REGISTER
 
 
+def seeded(refresh_n, gate_lo=None):
+    """门内的第一个步是不是全量步 —— 即缓存到底有没有被写满过一次。
+
+    partial 步的 inactive 行全部取自缓存 (K/V / restore / head logit)。缓存只在
+    全量步被写。gate_lo=0 且 refresh_n<=0 时, step 0 就是 partial 步而此前没有
+    任何全量步 —— 那一步读到的是空缓存, 实装里退化成 kv_miss / restore_miss /
+    head_miss, inactive 行拿到的是 0 而不是"上一步的值"。这不是"缓存变陈旧",
+    是缓存里根本没有东西, 而且没有 refresh 去修它。
+    此时下面的 FLOPs 数学上仍成立, 但它对应的是一次数值上无意义的采样。
+    """
+    lo = GATE_LO if gate_lo is None else gate_lo
+    return lo > 0 or refresh_n >= 1
+
+
 def run(refresh_n):
     """返回 (总 FLOPs, refresh 步数, partial 步数, partial 平均 k/N)。"""
     total = 0.0
@@ -133,8 +153,9 @@ def report(size):
         tot, nr, npart, kr = run(n)
         n_full = STEPS - (GATE_HI - GATE_LO) + nr
         label = "none" if n == 0 else str(n)
+        flag = "" if seeded(n) else "   <- 缓存从未被写满 (空缓存, 数值无意义)"
         print(f"{label:>10s} {nr:>9d} {npart:>9d} {n_full:>11d} "
-              f"{kr:>8.4f} {tot/1e9:>9.1f} {tot/BASE:>8.4f} {BASE/tot:>8.3f}x")
+              f"{kr:>8.4f} {tot/1e9:>9.1f} {tot/BASE:>8.4f} {BASE/tot:>8.3f}x{flag}")
     print()
 
 

@@ -1,0 +1,65 @@
+# large-384 / lazycache r=1 / L0-23 / N=2 —— step gate 左端 S=0 的 latency & 理论 FLOPs
+#
+# 起因: results/halton_large384_lazycache_gatestart_ablation.txt 的
+#       lazycache_r1.0_N2_L0-23_S0 (FID 3.9676 / IS 228.4309) 只测了 FID/IS,
+#       这里补上它的实测 latency 与理论 FLOPs, 并与默认档 S=5 同机同进程对照。
+#
+# 复现:
+#   HALTON_PARTIAL_START_STEP=0 REFRESH_NS=2 python flops_lazy_refresh.py large
+#   HALTON_PARTIAL_START_STEP=0 REFRESH_NS=2 python bench_latency_refresh.py 16 1 5 large
+#   (S=5 同上, 把 0 换成 5)
+#
+# ============================================================================
+# 理论 FLOPs (flops_lazy_refresh.py, large-384, baseline = 13059.8 GFLOPs/image)
+# ----------------------------------------------------------------------------
+#   gate      refresh步  partial步  全量步合计  平均k/N   GFLOPs  FLOPs比  理论加速
+#   [0,31)       16         15         17      0.0531   7267.8   0.5565   1.797x
+#   [5,31)       13         13         19      0.0587   8069.3   0.6179   1.618x
+#
+#   S=0 门内多了 5 个 step (0..4), 按 N=2 的相位切成 3 refresh + 2 partial,
+#   净多 2 个 partial 步 -> FLOPs 从 0.618 降到 0.557 (-9.9%)。
+#
+# ============================================================================
+# 实测 latency 汇总 (RTX A6000 单卡, batch=16, fp32, warmup=1 timed=5)
+# ----------------------------------------------------------------------------
+#   config              transf ms/img   实测加速   理论加速   达成率   FID(50k)
+#   baseline (S=0 跑)      2015.09       1.000x    1.000x   100.0%   2.5410
+#   S=0  N=2               1180.22       1.707x    1.797x    95.0%   3.9676
+#   baseline (S=5 跑)      2028.40       1.000x    1.000x   100.0%   2.5410
+#   S=5  N=2 (默认档)      1295.83       1.565x    1.618x    96.7%   2.6951
+#
+#   两次 baseline 相差 0.7%, 且与既有 bench_refresh_large.txt 的 2011.54 一致,
+#   故两档可直接并列。S=0 相对 S=5 只快 1.098x (1295.83/1180.22), 却付出
+#   ΔFID +1.27 —— 在 FID-latency 权衡上被 S=5 完全支配。
+#
+# ============================================================================
+# 原始输出
+# ----------------------------------------------------------------------------
+########## START_STEP=0 ##########
+
+== latency bench (refresh sweep) | large-384 | batch=16 | warmup=1 timed=5 | NVIDIA RTX A6000 ==
+   step gate = [0, 31)  (HALTON_PARTIAL_START_STEP)
+
+VQGAN decode      :   24.87 ms/img  (batch   397.9±0.3 ms)
+
+config                total ms/img  transf ms/img  speedup    theo     达成率
+baseline                 2039.96        2015.09    1.000x   1.000x  100.0%
+lazy r=1 N=2             1205.09        1180.22    1.707x   1.797x   95.0%
+                     └ partial k/N=0.0531 (15 步) / 全量 17 步; kv_miss=0 head(p/f/miss)=15/17/0
+
+注: transf = total - VQGAN decode (各档解码相同); speedup 以 transformer-only 计。
+    达成率 = 实测加速 / 理论加速。
+########## START_STEP=5 ##########
+
+== latency bench (refresh sweep) | large-384 | batch=16 | warmup=1 timed=5 | NVIDIA RTX A6000 ==
+   step gate = [5, 31)  (HALTON_PARTIAL_START_STEP)
+
+VQGAN decode      :   25.16 ms/img  (batch   402.6±0.5 ms)
+
+config                total ms/img  transf ms/img  speedup    theo     达成率
+baseline                 2053.56        2028.40    1.000x   1.000x  100.0%
+lazy r=1 N=2             1320.99        1295.83    1.565x   1.618x   96.7%
+                     └ partial k/N=0.0587 (13 步) / 全量 19 步; kv_miss=0 head(p/f/miss)=13/19/0
+
+注: transf = total - VQGAN decode (各档解码相同); speedup 以 transformer-only 计。
+    达成率 = 实测加速 / 理论加速。

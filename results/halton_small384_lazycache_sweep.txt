@@ -75,3 +75,5 @@ lazycache_r1.0_N3_L0-11                    6.1352   238.7815 52:17     ratio=1.0
 lazycache_r1.0_N4_L0-11                    6.1439   236.3512 49:57     ratio=1.0 refresh_every_4 layers=0..11
 lazycache_r1.0_N8_L0-11                    6.3922   223.3203 46:19     ratio=1.0 refresh_every_8 layers=0..11
 lazycache_r1.0_N13_L0-11                   6.9617   210.4219 43:53     ratio=1.0 refresh_every_13 layers=0..11
+lazycache_r1.0_N5_L0-11                    6.1856   232.4734 49:01     ratio=1.0 refresh_every_5 layers=0..11
+lazycache_r1.0_N6_L0-11                    6.2253   228.9829 47:57     ratio=1.0 refresh_every_6 layers=0..11

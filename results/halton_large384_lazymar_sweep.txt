@@ -1,0 +1,90 @@
+# Halton-MaskGIT — large 384 / cfg=0.5   LazyMAR 复现 sweep
+#   (LazyMAR 的两个缓存一起上: Token Cache + CFG 残差 Cache)
+#
+# Model    : ImageNet_384_large.pth (480M, 24 层 / 1024 dim / 24^2+1=577 token)
+# Sampler  : halton, step=32, cfg_w=0.5, fp32, seed=42, global_bsize=32, 50000 imgs
+#            —— Halton 顺序 / step gate / 温度 / CFG 与 baseline 完全一致, 未改动。
+# Gate     : step 5..30, 两个缓存的 refresh 周期取同一个 N
+# Layers   : LAZY_START=3 .. LAZY_END=23 (从 LazyMAR 的打分层一路用到最后一层)
+#
+# ============================================================================
+# 方法 = LazyMAR (ICCV'25) 在 Halton-MaskGIT 上的复现, 两个缓存省的是不同维度
+# ----------------------------------------------------------------------------
+# (1) Token Cache —— 省 **token**   [LazyMAR/models/basic.py _prune_tokens]
+#     partial 步只重算 k_t = ceil(rho_t * 577) 个 token 的 Q/FFN, K/V 走全长
+#     per-layer 缓存 (active 行重算后 scatter 回缓存), 双向 attention 的上下文
+#     保持完整; 区间出口层用缓存回填 inactive 行; head 也只算 active 行。
+#     选点 = TopK(1 - cos(V_l3(t), V_l3(t-1))), **没有任何强制 token**
+#     (LazyMAR 里 score[mask_to_pred]=0 的强制保留被去掉 —— 见 lazyvsim sweep 的
+#      消融: U_(t-1) 本来就 100% 被打分选中, 而 U_t 落选并不损失 FID)。
+#     rho_t = LazyMAR 的 RETAIN_RATIO_SCHEDULE, 64 步表按生成进度重采样到 32 步。
+#     实装: HALTON_LAZY_CACHE=1 + HALTON_LAZY_VSIM=1
+#
+# (2) CFG 残差 Cache —— 省 **batch**  [LazyMAR/models/mar_cache.py forward_mae_decoder]
+#     lazy 步只把 [cond ; uncond] 的 **cond 半个 batch** 送进 transformer 主干,
+#     uncond 半由 "cond + 上一个整批步记下的 (uncond - cond) 残差" 补出来 ——
+#     即 `x = torch.cat([x, x + diff], dim=0)`。
+#     残差缓存点取在 transformer 出口 / last_norm 之前 (与 LazyMAR 缓存在 decoder
+#     最后一层输出对应), 因此 uncond 分支仍然用它自己的 y 过 AdaNorm 和 head,
+#     被跳过的只有主干的 24 层。
+#     实装: HALTON_CFG_DELTA=1
+#           Network/transformer.py:Transformer.forward + _fit_cond_half
+#           Sampler/halton_sampler.py 的 cfg_delta_reuse 门控
+#
+# N 的语义 (两个缓存取同一个值):
+#   Token Cache : gated step 里 counter % N == 0 的步全量刷新 (N<=0 = 永不刷新)
+#   CFG 残差    : Token Cache 的 partial 步一律复用残差 (batch 必须保持半份);
+#                 只有在 Token Cache 的**全量步**上, 它才按自己的 N 决定刷不刷新。
+#                 所以下表里 "半batch步" 总是 >= "partial步"。
+#
+# 正确性 (python test_cfg_delta.py, 10/10):
+#   D1  输入不变时残差重构精确到浮点噪声 floor —— cond Δ=2.09e-07 / uncond Δ=1.94e-07,
+#       而"同一份输入按 2B 跑和按 B 跑"的纯 kernel 噪声本身就是 2.09e-07。
+#   D2  CFG_DELTA_N=1 (每个整批步都刷新, 从不复用) 与 baseline 逐位一致。
+#   D7/D8/D9  两个缓存同开时: 逐步 token 预算与只开 Token Cache 时逐个相同, 打分在
+#       半 batch 上做且不再做 cfg_pair 分数平均, kv_miss / restore_miss / score_miss /
+#       head_miss / cfg_delta_miss 全为 0。
+#   既有方案未受影响: test_lazy_token_cache.py (16/16), test_lazy_vsim.py (9/9)。
+#
+# 接口: launch/eval_fid_large384_lazymar.sh   (队列: launch/run_lazymar_all_sweeps.sh)
+#   HALTON_LAZY_CACHE=1 HALTON_LAZY_VSIM=1 HALTON_LAZY_VSIM_SCHED=lazymar
+#   HALTON_LAZY_START_LAYER=3 HALTON_LAZY_END_LAYER=23 HALTON_CACHE_REFRESH_N=N
+#   HALTON_CFG_DELTA=1 HALTON_CFG_DELTA_N=N HALTON_CFG_DELTA_START=5
+#   保护: cfg_w=0 时报错 (没有 uncond 分支); 与旧的 FFN/ATTN/LAYER delta 缓存组合
+#         时报错 (那些缓存在 batch 减半时会静默退化成 0-delta)。
+#
+# ============================================================================
+# 【理论 FLOPs】L3-23
+# ----------------------------------------------------------------------------
+#   baseline = 26119.7 GFLOPs/image  (= 2 x 单前向 x 32 步; CFG 的 2x 在本表里是显式的)
+#   复现: python flops_lazymar.py large
+#
+#       N  partial步   rho=1步    半batch步    平均k/N    GFLOPs   FLOPs比      理论加速
+#    none        26        5         26   0.3328    9486.0   0.3632    2.753x
+#       2        13        2         19   0.3136   15376.2   0.5887    1.699x
+#       3        17        3         23   0.3176   12813.9   0.4906    2.038x
+#       4        19        3         24   0.3131   11880.2   0.4548    2.199x
+#       8        22        4         25   0.3250   10814.8   0.4140    2.415x
+#      13        24        4         25   0.3138   10205.2   0.3907    2.559x
+#
+# ============================================================================
+# 【实测端到端 latency】batch=16, warmup=1 timed=5, 单卡 A6000, fp32, no compile,
+#   ImageNet_384_large.pth, cfg_w=0.5, step=32
+#   复现: python bench_latency_lazymar_sweep.py 16 1 5 large
+#         -> results/latency/bench_lazymar_large.txt
+# ----------------------------------------------------------------------------
+#   (bench 尚未完成 —— 跑完后重新执行本生成脚本即可填入)
+#
+# ============================================================================
+# 【50k FID】(4x A6000 DDP, global_bsize=32, 50000 imgs, seed=42, cfg=0.5)
+#   baseline 参照 = FID 2.5410 / IS 256.15
+#     取自 results/halton_large384_lazycache_sweep.txt 的对照行
+#   同仓库其它缓存方案参照:
+#     lazycache r=1 (调度选点, 无 CFG 残差): N=none 10.8181/153.50  N=2 2.6951/252.31  N=3 2.9419/245.61
+#                                             N=4     3.1899/238.04  N=8 4.4322/214.80  N=13 5.8257/198.09
+#     只开 Token Cache (lazyvsim L3-23): N=2 2.6422/254.37   —— 唯一跑过的一档
+#
+#   下面的行由 launch/eval_fid_large384_lazymar.sh 自动 append。
+#
+# columns: config_name  FID  IS  runtime  notes
+# ----------------------------------------------------------------------------

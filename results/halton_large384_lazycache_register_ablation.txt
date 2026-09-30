@@ -1,0 +1,88 @@
+# Halton-MaskGIT — large 384 / cfg=0.5 / N=2   lazycache 的 register token 消融
+#
+# Model    : ImageNet_384_large.pth (480M, 24 层 / 1024 dim / 24^2+1 = 577 token)
+# Sampler  : halton, step=32, cfg_w=0.5, fp32, seed=42, global_bsize=32, 50000 imgs
+#            —— Halton 顺序 / step gate 5..30 / 温度 / CFG 与 baseline 完全一致
+# Method   : HALTON_LAZY_CACHE=1, r=1 (forced-only, 不打分), 全部 24 层, REFRESH_N=2
+# 接口     : launch/eval_fid_large384_lazycache_noreg.sh
+#
+# ============================================================================
+# 【被消融的是什么】
+# ----------------------------------------------------------------------------
+# lazycache 每个 partial 步重算的 token 集合默认是
+#       active = U_t ∪ U_{t-1} ∪ register
+# register 那一项是无条件加进去的 (Network/transformer.py:1108-1114), 当时的理由:
+#       "register 是全局 attention sink, 冻结它的代价远大于重算 (只有 1 个 token)"
+# —— 这个理由从来没有被 50k FID 验证过。本实验把它去掉:
+#       active = U_t ∪ U_{t-1}                     (HALTON_LAZY_REGISTER_ACTIVE=0)
+#
+# 去掉之后 register 行在 partial 步里完全走缓存:
+#   * 残差流: _lazy_restore 从 lazy_restore_cache 取它上一步的值
+#   * K/V   : 每层从 per-layer 全长缓存取它上一步的 k/v
+#   * head  : 不再为它算 logit (它本来就不产 code, 只是被丢掉)
+# 但它**仍然在所有 577 个 token 的 attention 上下文里** —— 变的只是"它自己的
+# 表示每步更不更新", 不是"别人还看不看得见它"。
+#
+# 算力上这一档几乎不省: 577 -> 576, < 0.2% 的 token。所以要看的是 **质量**:
+# 那句"冻结代价远大于重算"到底成不成立。
+#   * 若 FID 基本不动  -> 强制 register active 是不必要的约束, 后续 vsim/lazymar
+#     的选点也不必为它留名额, 结论可以简化。
+#   * 若 FID 明显变差  -> attention sink 的说法被 50k 尺度证实, 值得写进方法部分。
+#
+# ============================================================================
+# 【对照组】(同脚本同参数, 唯一差别就是这个开关)
+# ----------------------------------------------------------------------------
+#   baseline (无 cache)                       FID 2.5410  / IS 256.15
+#   lazycache N=2, register active  (默认)    FID 2.6951  / IS 252.3132  / 2:41:29
+#       -> results/halton_large384_lazycache_sweep.txt 的 lazycache_r1.0_N2_L0-23
+#   lazycache N=2, register 消融    (本表)    见下
+#
+# ============================================================================
+# 【正确性】python test_lazy_register_ablation.py  (6/6)
+# ----------------------------------------------------------------------------
+#   R1  RE=0 时每个 partial 步的 active 集合 *恰好* = U_t ∪ U_{t-1}, register 列
+#       一个都不在里面; kv_miss / restore_miss / head_miss / forced_nonuniform 全 0
+#   R2  反证: 默认 (以及 RE=1) 时 register 必被强制 active, 每步 k 正好多 1
+#   R3  register=3 / register=0 的模型同样正确 (不是靠 "最后一列" 硬编码)
+#   R4  全量步不受影响 —— 不给 active_mask 时仍逐位等于 baseline
+#   R5  开关确实改变结果 (logits max|Δ| = 3.1e-03), 消融非空
+#   R6  head 的 active 下标全部 < n_img, 不越界, head_miss=0
+#   既有方案未受影响: test_lazy_token_cache.py (16/16)
+#
+# ============================================================================
+# 【结果】50k FID/IS  (2026-08-25, 4x A6000 DDP, 1562 x 32 = 49984 imgs)
+# ----------------------------------------------------------------------------
+#   配置                                   FID       IS        eval runtime
+#   baseline (无 cache)                    2.5410    256.15      —
+#   lazycache N=2, register active (默认)  2.6951    252.3132    2:41:29
+#   lazycache N=2, register 消融 (本表)    2.6948    252.2267    2:43:24
+#                                          ------    --------
+#                              Δ (消融-默认)  -0.0003   -0.0865
+#
+# 【结论】"register 必须每步重算" 这条约束是**不必要的**。
+#
+#   把 register 从每步重算的 token 集合里去掉之后, 50k FID 变化 -0.0003
+#   (2.6951 -> 2.6948, 即消融档还略好一点点), IS 变化 -0.087 (252.31 -> 252.23)。
+#   两个数都远小于方案本身相对 baseline 的差距 (FID +0.154 / IS -3.8), 也小于
+#   同仓库里"数学上等价、只是索引顺序不同"的两档之间的观测差 (结论 1 里
+#   layercache vs lazy 同 N 的 FID 差 0.0002 ~ 0.0455)。即: 在 50k 尺度上
+#   这两档不可区分。
+#
+#   于是 transformer.py:1108-1114 那句 "register 是全局 attention sink, 冻结
+#   它的代价远大于重算" 没有被数据支持 —— 至少在 Halton-MaskGIT large-384 /
+#   32 步 / N=2 这个工作点上, register 的表示每步更不更新对生成质量没有影响。
+#   合理的解释: register 不产 code, 它唯一的作用是作为别人的 attention 上下文
+#   (K/V), 而它的 K/V 在整个采样循环里本来就变化很小 —— cond 只有类别嵌入,
+#   AdaLN 的 gamma/beta/alpha 在 32 步内恒定 (见 lazycache sweep 的结论 1)。
+#
+#   实践含义:
+#     * lazycache 的强制集合可以简化成 active = U_t ∪ U_{t-1}, 少一条特例。
+#     * 更重要的是对 vsim / lazymar 那一支: 那两档的选点是纯 V 余弦 TopK,
+#       register 要跟 576 个图像 token 抢名额。本结果说明**不必**为它单独留
+#       名额, 也不必担心它偶尔落选 —— 现有实装 (无强制集合) 是对的。
+#     * 算力上这一档本来就几乎不省 (577 -> 576, < 0.2%), runtime 的 +1m55s
+#       是机器噪声, 不是消融的代价。
+#
+# columns: config_name  FID  IS  runtime  notes
+# ----------------------------------------------------------------------------
+lazycache_r1.0_N2_L0-23_noreg                  2.6948   252.2267  2:43:24   register_active=0 ratio=1.0 refresh_every_2 layers=0..23 cfg=0.5

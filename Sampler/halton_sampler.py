@@ -149,11 +149,60 @@ class HaltonSampler(object):
         except ValueError:
             cache_refresh_n = 0
 
+        # Left edge of the partial-update gate (HALTON_PARTIAL_START_STEP).
+        # 默认 5 —— 出自 analyze_ffn_delta_stability: 前几步整幅图还在剧烈变化,
+        # 缓存里的东西陈旧得没法用。这个 5 从来没有被 50k FID 扫过, 本 env 就是
+        # 为了扫它 (0 = 从第一步就开始缓存)。右端 31 不动: 最后一步必须全量。
+        try:
+            partial_start_step = int(os.environ.get("HALTON_PARTIAL_START_STEP", "5"))
+        except ValueError:
+            partial_start_step = 5
+        partial_start_step = max(0, partial_start_step)
+
         # V-similarity token selection (HALTON_LAZY_VSIM=1) is the only consumer
         # of the step index: its recompute ratio decays with the decoding step
         # (LazyMAR's RETAIN_RATIO_SCHEDULE).  Pass the step only in that mode so
         # every other model / sampler path keeps its original call signature.
         lazy_vsim = os.environ.get("HALTON_LAZY_VSIM", "0") == "1"
+
+        # ── LazyMAR CFG 残差缓存 (HALTON_CFG_DELTA=1) ──────────────────────
+        # lazy 步只把 cond 半个 batch 送进 transformer, uncond 用上一整批步记下的
+        # (uncond - cond) 残差补出来 —— LazyMAR forward_mae_decoder 的做法。
+        #   HALTON_CFG_DELTA_START (默认 5)  之前的步一律整批 —— 残差就是在这些
+        #       步里写下的 (每个整批步都无条件刷新残差), 所以门一开就有得用。
+        #   HALTON_CFG_DELTA_N   门开之后, 每 N 个"CFG 自己说了算"的步刷新一次:
+        #       <=0 (默认) 门开之后不再主动刷新, 一直沿用门开前最后一个整批步的残差
+        #       N=1        每个这样的步都刷新 -> 从不 reuse, 等价于关掉本方案 (sanity check)
+        #       N>=2       每 N 个刷新一次
+        #       注: token cache 开着时, "CFG 自己说了算"的步 = 它的全量步; token
+        #       cache 关着时 = 门内的每一步。
+        # 不变式: **跑整批 [cond;uncond] 的步必须是 token cache 的全量步**。否则
+        # 半 batch 的 K/V / restore 缓存会跟 2B 的输入对不上。所以 token cache 的
+        # partial 步一律 reuse, CFG 自己的节奏只在它的全量步上生效。
+        cfg_delta_on = os.environ.get("HALTON_CFG_DELTA", "0") == "1"
+        if cfg_delta_on and self.w == 0:
+            raise RuntimeError(
+                "HALTON_CFG_DELTA 需要 CFG 打开 (w != 0): w=0 时 batch 里根本没有 "
+                "uncond 分支, 残差缓存无从谈起。"
+            )
+        try:
+            cfg_delta_n = int(os.environ.get("HALTON_CFG_DELTA_N", "0"))
+        except ValueError:
+            cfg_delta_n = 0
+        try:
+            cfg_delta_start = int(os.environ.get("HALTON_CFG_DELTA_START", "5"))
+        except ValueError:
+            cfg_delta_start = 5
+        if cfg_delta_on and partial_update and cfg_delta_start > partial_start_step:
+            # 不变式: 跑整批 [cond;uncond] 的步必须是 token cache 的全量步。
+            # cfg 窗口比 partial 门开得晚 -> 中间那几步是 "token cache 的 partial
+            # 步 + CFG 的整批步", 那一步的 K/V / restore 缓存 (半 batch) 跟 2B 的
+            # 输入对不上, 会静默退化成缓存 miss。宁可报错。
+            raise RuntimeError(
+                f"HALTON_CFG_DELTA_START ({cfg_delta_start}) 必须 <= "
+                f"HALTON_PARTIAL_START_STEP ({partial_start_step}): CFG 残差窗口"
+                "要覆盖 token cache 的每一个 partial 步。"
+            )
 
         # Build the Halton mask if not already created
         if self.basic_halton_mask is None:
@@ -198,6 +247,7 @@ class HaltonSampler(object):
             prev_r = 0
             prev_U_t = None  # U_t from the previous step (for active-mask union)
             gated_step_counter = 0  # counts steps that fall inside the partial-update gate
+            cfg_gated_counter = 0   # 同上, 但只数 CFG 残差缓存自己决策的那些步
             for index in bar:
                 # Compute the number of tokens to predict
                 ratio = ((index + 1) / self.step)
@@ -222,10 +272,11 @@ class HaltonSampler(object):
                 # (consecutive U_t / U_{t-1} are disjoint by Halton construction,
                 #  so per-row True-count stays uniform across the batch).
                 # Step-level gating (from analyze_ffn_delta_stability):
-                #   t >= 5  : skip early unstable steps
+                #   t >= partial_start_step : skip early unstable steps
+                #                             (默认 5, HALTON_PARTIAL_START_STEP 可改)
                 #   t < 31  : last step is computed in full
                 vit_active_mask = None
-                if partial_update and 5 <= index < 31:
+                if partial_update and partial_start_step <= index < 31:
                     # Decide if this gated step is a "refresh" step that runs
                     # full FFN to rewrite cached_ffn_delta for all positions.
                     is_refresh = (
@@ -241,6 +292,21 @@ class HaltonSampler(object):
                         vit_active_mask = active.to(trainer.args.device)
                     # else: leave vit_active_mask=None so all blocks run the
                     # full-FFN branch (active_mask=None) and refresh the cache.
+
+                # CFG 残差缓存的 refresh / reuse 门控 (见上面的不变式说明)。
+                # 窗口的右端必须与上面 partial-update 的门 (5 <= index < 31) 完全
+                # 一致, 否则会出现"token cache 的 partial 步 + CFG 的整批步"这种
+                # 组合 —— 那一步的 K/V 缓存 (半 batch) 跟输入 (2B) 对不上。
+                cfg_delta_reuse = False
+                if cfg_delta_on and cfg_delta_start <= index < 31:
+                    if vit_active_mask is not None:
+                        # token cache 的 partial 步: batch 必须保持半份。
+                        cfg_delta_reuse = True
+                    else:
+                        is_cfg_refresh = (cfg_delta_n >= 1
+                                          and cfg_gated_counter % cfg_delta_n == 0)
+                        cfg_gated_counter += 1
+                        cfg_delta_reuse = not is_cfg_refresh
 
                 # Choose softmax temperature
                 _temp = self.temperature[index] ** self.temp_pow
@@ -261,6 +327,7 @@ class HaltonSampler(object):
                             torch.cat([~drop, drop], dim=0),
                             active_mask=am_cat,
                             cfg_pair=True,
+                            cfg_delta=cfg_delta_reuse,
                             **step_kw,
                         )
                     logit_c, logit_u = torch.chunk(logit, 2, dim=0)

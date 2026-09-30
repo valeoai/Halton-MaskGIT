@@ -25,6 +25,10 @@ WARMUP = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 TIMED  = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 SIZE   = sys.argv[4] if len(sys.argv) > 4 else os.environ.get("LAZY_VIT_SIZE", "large")
 
+# step gate 的左端 —— 与 Sampler/halton_sampler.py 读同一个 env (默认 5)。
+# flops_lazy_refresh 在 import 时已经读过同一个 env, 所以理论列与被测配置同门。
+GATE_START = FL.GATE_LO
+
 FL.set_size(SIZE)                    # 理论列与被测模型同尺寸
 
 args = load_args_from_file("Config/base_cls2img.yaml")
@@ -47,6 +51,7 @@ labels = torch.LongTensor([base_labels[i % len(base_labels)] for i in range(BATC
 def set_cfg(lazy, refresh_n):
     """与 launch/eval_fid_large384_lazycache.sh 的 env 设置保持一致。"""
     os.environ["HALTON_PARTIAL_UPDATE"] = "1" if lazy else "0"
+    os.environ["HALTON_PARTIAL_START_STEP"] = str(GATE_START)
     os.environ["HALTON_CACHE_REFRESH_N"] = str(refresh_n)
     os.environ["HALTON_LAZY_CACHE"] = "1" if lazy else "0"
     os.environ["HALTON_LAZY_CACHE_RATIO"] = "1.0"
@@ -91,7 +96,8 @@ CONFIGS = [("baseline", None)] + [(f"lazy r=1 N={n if n else 'none'}", n)
                                   for n in FL.REFRESH_NS]
 
 print(f"\n== latency bench (refresh sweep) | {SIZE}-384 | batch={BATCH} | "
-      f"warmup={WARMUP} timed={TIMED} | {torch.cuda.get_device_name(0)} ==\n")
+      f"warmup={WARMUP} timed={TIMED} | {torch.cuda.get_device_name(0)} ==")
+print(f"   step gate = [{GATE_START}, {FL.GATE_HI})  (HALTON_PARTIAL_START_STEP)\n")
 
 dec_mean, dec_std = bench(time_decode)
 print(f"VQGAN decode      : {dec_mean*1000/BATCH:7.2f} ms/img  "
@@ -115,6 +121,10 @@ for name, n in CONFIGS:
     print(f"{name:20s} {m*1000/BATCH:11.2f}   {tr*1000/BATCH:12.2f}   "
           f"{spd:6.3f}x  {theo:6.3f}x  {spd/theo*100:5.1f}%")
     rows.append((name, m*1000/BATCH, tr*1000/BATCH, spd, theo))
+    if n is not None and not FL.seeded(n, GATE_START):
+        print(f"{'':20s} └ !! 门从 step0 就开且不 refresh: 没有任何全量步先把缓存"
+              f"写满, partial 步读到的是空缓存 (见下面的 miss 计数)。这一行的"
+              f"速度是真的, 但它对应的采样在数值上无意义。")
     if n is not None:
         st = getattr(model.vit, "module", model.vit).get_lazy_stats()
         print(f"{'':20s} └ partial k/N={st['partial_active_ratio']:.4f} "

@@ -1,0 +1,135 @@
+# Halton-MaskGIT — large 384 / cfg=0.5   lazycache「从 step 0 开始 + 不 refresh」
+#
+# Model    : ImageNet_384_large.pth (480M, 24 层 / 1024 dim / 24^2+1 = 577 token)
+# Sampler  : halton, step=32, cfg_w=0.5, fp32, seed=42, global_bsize=32, 50000 imgs
+# Method   : HALTON_LAZY_CACHE=1, r=1 (forced-only, 无 V 打分), 全部 24 层,
+#            lazy head, register 保持 active (默认)
+# 接口     : launch/eval_fid_large384_lazycache_s0_norefresh.sh
+# 理论     : HALTON_PARTIAL_START_STEP=0 REFRESH_NS=31,0 python flops_lazy_refresh.py large
+# latency  : CUDA_VISIBLE_DEVICES=0 HALTON_PARTIAL_START_STEP=0 REFRESH_NS=31,0 \
+#              python bench_latency_refresh.py 16 1 5 large
+#            -> results/latency/bench_lazycache_s0_norefresh_large.txt
+#
+# ============================================================================
+# 【这一档到底是什么 —— 以及为什么不能直接写 REFRESH_N=0】
+# ----------------------------------------------------------------------------
+# 要测的设定是"从第 0 step 就开始用 cache, 而且不做 refresh"。在采样器里这是
+# step gate 的左端 = 0 (HALTON_PARTIAL_START_STEP=0) 且门内没有周期性全量刷新。
+#
+# 但 START=0 + REFRESH_N=0 这个字面组合是**不成立**的:
+#   partial 步的 inactive 行全部取自缓存 —— per-layer K/V、_lazy_restore 的残差流、
+#   lazy head 的 logit。这些缓存只在**全量步**被写 (Network/transformer.py 的
+#   active_mask=None 分支)。gate 从 step 0 就开、门内又一次都不 refresh 的话,
+#   step 0 之前根本没有任何全量步, 它读到的是空缓存。实装里这退化成
+#   kv_miss / restore_miss / head_miss, inactive 行拿到的是 **0** 而不是"上一步
+#   的值", 而且后面 30 步没有任何 refresh 去修它。
+#
+#   小模型 (depth=6, 32 step) 上逐步核实:
+#       START=0 N=0   模式 P×31 F   kv_miss=12  restore_miss=1  head_miss=1
+#       START=0 N=31  模式 F P×30 F  全部 miss = 0
+#   真实 large-384 上同样成立 (见 latency 表): N=0 那一档 kv_miss=48, head_miss=1。
+#
+# 所以本表用 REFRESH_N=31 表达该设定:
+#   门内 31 个 step (0..30), gated_step_counter = 0..30, counter%31==0 只在
+#   counter=0 命中 ->
+#     step 0     全量  (唯一作用: 把缓存写满一次, seed)
+#     step 1..30 全部 partial, 期间**一次 refresh 都没有**
+#     step 31    全量  (门外, 最后一步一律全量, 与所有既有档一致)
+#   = 30/32 步走缓存。比既有最激进的档 (START=5 N=none, 26/32) 还多 4 步。
+#
+# 字面的 START=0 + N=0 (空缓存) **没有测 FID** —— 它不是一个可用配置, 上面的
+# miss 计数已经足以说明它读的是空缓存, 50k FID 再花一遍卡时买不到额外信息。
+# 它在本表里只保留理论 FLOPs 与实测 latency 两列 (这两项与缓存内容无关, 只取决
+# 于哪些步走 partial 分支, 所以照样是准的), 作为"上界"参考。
+#
+# ============================================================================
+# 【理论 FLOPs】(flops_lazy_refresh.py, FLOPs = 2 x MACs, 与既有各表同一个模型)
+# ----------------------------------------------------------------------------
+#   baseline = 13059.8 GFLOPs/image
+#
+#   config                        partial步  全量步  平均k/N   GFLOPs   FLOPs比   理论加速
+#   S=0 no-refresh (step0 seed)      30        2    0.0548    1495.5   0.1145    8.733x
+#   S=0 no-refresh (字面, 空缓存)     31        1    0.0537    1096.2   0.0839   11.914x  <- 未测 FID, 仅作上界
+#   [对照] S=5 no-refresh            26        6    0.0569    3059.6   0.2343    4.268x
+#   [对照] S=5 N=2 (默认档)          13       19    0.0587    8069.3   0.6179    1.618x
+#
+# 【实测 latency】batch=16, warmup=1 timed=5, 单卡 A6000, fp32, no compile
+#   VQGAN decode = 24.95 ms/img (各档相同, 已从 transf 中扣除)
+#   本次 baseline 2020.52 ms/img, 与既有表的 2011.54 / 2005.06 在 1% 内, 可并列。
+# ----------------------------------------------------------------------------
+#   config                        total ms/img  transf ms/img  实测加速  理论加速  达成率
+#   baseline                         2045.46       2020.52    1.000x   1.000x   100.0%
+#   S=0 no-refresh (step0 seed)       353.69        328.74    6.146x   8.733x    70.4%
+#   S=0 no-refresh (字面, 空缓存)      295.92        270.98    7.456x  11.914x    62.6%  <- 未测 FID
+#   [对照] S=5 no-refresh             576.38        551.16    3.650x   4.268x    85.5%
+#   [对照] S=5 N=2                   1308.52       1283.29    1.567x   1.618x    96.9%
+#
+#   缓存计数与理论完全一致:
+#     seed 档  partial 30 / 全量 2, kv_miss=0, head(p/f/miss)=30/2/0
+#     字面档   partial 31 / 全量 1, kv_miss=48, head(p/f/miss)=30/2/1  <- 空缓存的证据
+#
+#   注: 达成率随 partial 步占比上升而下降 (96.9% -> 85.5% -> 70.4%)。
+#       partial 步省的是 FLOPs, 但 gather/scatter、缓存回填、per-layer K/V 的
+#       非连续访存不省, 且 partial 步的 k≈31 个 token 根本喂不饱 A6000 ——
+#       kernel 变成访存/启动开销主导。partial 步越多, 这部分固定开销占比越大。
+#
+# ============================================================================
+# 【50k FID/IS】(4x A6000 DDP, global_bsize=32, 49984 imgs, seed=42)
+# ----------------------------------------------------------------------------
+#   对照 (同 sampler / 同 seed / 同脚本参数):
+#     baseline (无 cache)                FID  2.5410 / IS 256.15
+#     S=5 N=2   (默认档, 13/32 partial)  FID  2.6951 / IS 252.31
+#     S=0 N=2   (15/32 partial)          FID  3.9676 / IS 228.43
+#     S=5 none  (26/32 partial)          FID 10.8181 / IS 153.50
+#
+#   本表只测 S=0 / no-refresh / step0 seed 这一档 (30/32 partial)。
+#
+#   config                        partial/全量  FID       IS        实测加速  eval runtime
+#   baseline (无 cache)               0/32     2.5410   256.15     1.000x      —
+#   S=5 N=2 (默认档)                 13/19     2.6951   252.31     1.567x    2:41:29
+#   S=0 N=2                          15/17     3.9676   228.43       —       2:30:19
+#   S=5 no-refresh                   26/6     10.8181   153.50     3.650x    1:22:40
+#   S=0 no-refresh (本档)            30/2     54.2167    44.61     6.146x      58:34
+#
+# ============================================================================
+# 【结论】这一档不可用 —— FID 54.2, 是 baseline 的 21 倍
+# ----------------------------------------------------------------------------
+# 6.146x 的实测加速是真的, 但质量塌到 FID 54.2 / IS 44.6。作为参照, IS 44.6 已经
+# 掉到"几乎认不出类别"的量级 (baseline 256.15)。没有任何取舍空间。
+#
+# 【为什么比 S=5 no-refresh (FID 10.82) 还差 5 倍】
+# 两档都是"门内一次 refresh 都没有", 差别只在**缓存是在什么画面上被写下来的**。
+#
+#   partial 步并不是把 step0 的缓存冻住不动 —— 每个 partial 步都会把自己的 k 个
+#   active 行 scatter 回缓存 (Network/transformer.py 的 cached_ffn_delta /
+#   lazy_restore_cache / per-layer K/V 都是这样增量更新的)。active = U_t ∪ U_{t-1},
+#   所以每个 token 恰好在它被释放的前后 2 步里是 active 的, 之后它在缓存里的值就
+#   **永远停在被释放的那一刻**, 不再随后续画面变化。
+#
+#   于是"全量步"的真正作用是: 让所有 577 个 token 在当前这幅(已经部分成形的)画面
+#   上重新对齐一次。
+#     S=5 no-refresh : step 0..4 全量 —— 前 5 步里整幅图被完整地重算过 5 次, 缓存
+#                      是在"已经解码了 r_4 个 token"的画面上写下的。
+#     S=0 no-refresh : 只有 step 0 全量 —— 而 step 0 的画面几乎全是 mask token
+#                      (r_0 = 1)。缓存是在**一张空画布**上写下的, 而且此后再也没有
+#                      任何一步让它重新对齐。
+#   少掉的 4 个全量步不是"少 4/32 的算力", 而是唯一一次全局对齐发生在信息量最低的
+#   时刻。这解释了为什么 FID 从 10.82 跳到 54.22 —— 不是线性恶化, 是塌掉。
+#
+# 【与 gatestart 消融 (N=2) 的结论一致】
+#   results/halton_large384_lazycache_gatestart_ablation.txt 的结论 2 已经指出:
+#   "早期一个 step 的缓存代价 >> 末期一个 step 的缓存收益"。那里 N=2 保底还有
+#   13 个全量步兜着, 把 START 从 5 挪到 0 只让 FID 从 2.70 涨到 3.97。
+#   本档把兜底也撤掉 (全量步 19 -> 2), 同一个机理就不再被压制, 直接放大到 54.2。
+#   两处证据指向同一件事: **决定质量的是早期步有没有被全量算过**, 而不是总共缓存了
+#   多少步。
+#
+# 【对 no-refresh 路线的评价】
+#   no-refresh 在 S=5 时理论 4.268x / 实测 3.650x, FID 10.82 已经不可用;
+#   把门左端推到 0 换来 8.733x / 6.146x, FID 54.2 更不可用。
+#   即 no-refresh 这条线上不存在可用工作点, 左端往哪挪都救不回来 —— 要保住 FID
+#   必须有周期性全量步 (见 lazycache_sweep 的 N 扫描: 只有 N=2 的 FID 2.6951 可用)。
+#
+# columns: config_name  FID  IS  runtime  notes
+# ----------------------------------------------------------------------------
+lazycache_r1.0_S0_norefresh                    54.2167  44.6057   58:34     gate=0..30 no-refresh (step0 seed) partial=30/32 ratio=1.0 layers=0..23 cfg=0.5
